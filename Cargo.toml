@@ -13,5 +13,6 @@ name = "client"
 path = "src/client.rs"
 
 [dependencies]
-console = "0.15.1"
+crossterm = "0.24.0"
+rand = "0.8.5"
 tokio = { version = "1.20.1", features = ["full"] }
