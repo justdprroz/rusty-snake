@@ -1,8 +1,6 @@
-use std::io::{Stdout, Write};
-
 use crossterm::{
-    style::{Colors, ResetColor, SetColors},
-    ExecutableCommand,
+    style::{Colors, ResetColor, SetColors, Print},
+    QueueableCommand,
 };
 
 /// Traits that require object to be rendered on given buffer
@@ -114,25 +112,18 @@ impl RenderBuffer {
     }
 
     pub fn render_to<T: std::io::Write>(&self, stdout: &mut T) {
-        // stdout
-        //     .write_all(&self.buffer.iter().map(|x| *x as u8).collect::<Vec<u8>>())
-        //     .unwrap();
         let mut colors = Colors {
             foreground: None,
             background: None,
         };
-        let mut buf: Vec<u8> = Vec::with_capacity(1024);
         for char in &self.buffer {
             if char.colors != colors {
-                stdout.write_all(&buf).unwrap();
-                buf.clear();
                 colors = char.colors;
-                stdout.execute(SetColors(colors)).unwrap();
+                stdout.queue(SetColors(colors)).unwrap();
             }
-            buf.push(char.char as u8);
+            stdout.queue(Print(char.char)).unwrap();
         }
-        stdout.write_all(&buf).unwrap();
-        stdout.execute(ResetColor).unwrap();
+        stdout.queue(ResetColor).unwrap();
     }
 }
 

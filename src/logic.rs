@@ -76,7 +76,7 @@ impl Game {
                 }
                 Direction::Left => {
                     last.0 -= 1;
-                    snake.moved_from = Direction::Left;
+                    snake.moved_from = Direction::Right;
                 }
                 Direction::Down => {
                     last.1 += 1;
