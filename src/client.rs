@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+// #![allow(dead_code)]
 
 // Std Stuff
 use std::io::{stdout, BufWriter, Write};
@@ -6,32 +6,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use logic::{Direction, Game};
-use net::SnakeEvent;
+use logic::{Cell, Direction, Game};
+use net::{Signal, SnakeEvent};
 
 // Tokio Stuff
 use tokio::sync::mpsc;
 
 // Crossterm
 use crossterm::style::{Color, Colors};
-use crossterm::terminal::SetTitle;
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use crossterm::{event, terminal, ExecutableCommand, QueueableCommand};
 
 // Own Modules
 mod logic;
 mod net;
-mod render;
 
 // Renderings
-use render::RenderBuffer;
-use render::{RectangleShape, RenderChar};
+use rusty_ascii_graphics::RenderBuffer;
+use rusty_ascii_graphics::{RectangleShape, RenderChar};
 
 // Global status
 static APP_RUNNING: AtomicBool = AtomicBool::new(true);
 
-// Clear terminal by escape sequence to position 0:0
-fn clear_term() {
-    print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
+fn border_colors() -> Colors {
+    Colors {
+        foreground: Some(Color::Blue),
+        background: None,
+    }
 }
 
 #[tokio::main]
@@ -39,7 +40,7 @@ async fn main() {
     terminal::enable_raw_mode().unwrap();
     let mut stdout = BufWriter::new(stdout());
     stdout.execute(event::EnableMouseCapture).unwrap();
-
+    stdout.execute(EnterAlternateScreen).unwrap();
     let (tx, mut rx) = mpsc::channel::<event::Event>(32);
 
     // spawn user input system
@@ -59,16 +60,19 @@ async fn main() {
 
     // Game Stuff
     let (gw, gh) = (30, 30);
-    let mut game: Game = Game::new(gw, gh, 5, 5);
+    let mut game: Game = Game::new(gw, gh, 5, 5, true);
+    game.add_missing_food();
     game.add_player("just".to_string());
 
     let mut time = SystemTime::now();
 
     let mut use_fancy: bool = true;
-    let mut use_unicode: bool = true;
+    let mut use_unicode: bool = false;
+    let mut use_debug: bool = false;
+    let mut use_slow_mo: bool = false;
 
     // Game Loop
-    while APP_RUNNING.load(Ordering::Relaxed) {
+    'game_loop: while APP_RUNNING.load(Ordering::Relaxed) {
         stdout
             .queue(SetTitle((time.elapsed().unwrap().as_micros()) as u64))
             .unwrap();
@@ -97,9 +101,18 @@ async fn main() {
                             ),
                             'u' => use_unicode = !use_unicode,
                             'f' => use_fancy = !use_fancy,
+                            '\\' => use_debug = !use_debug,
+                            '/' => use_slow_mo = !use_slow_mo,
                             _ => {}
                         },
-                        event::KeyCode::Esc => APP_RUNNING.store(false, Ordering::Relaxed),
+                        event::KeyCode::Esc => {
+                            game.handle_events(
+                                SnakeEvent::Signal(Signal::Disconnect),
+                                "just".to_string(),
+                            );
+                            APP_RUNNING.store(false, Ordering::Relaxed);
+                            break 'game_loop;
+                        }
                         event::KeyCode::Enter => game.handle_events(
                             SnakeEvent::Movement(Direction::Stop),
                             "just".to_string(),
@@ -127,53 +140,22 @@ async fn main() {
         //draw
         buffer.clear(RenderChar::empty());
 
-        if use_unicode && use_fancy {
-            let r = RectangleShape::new(
-                0,
-                0,
-                1,
-                1,
-                RenderChar::new(
-                    '┏',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
-                false,
-            );
+        if use_fancy {
+            let char_set = [
+                RenderChar::new('╔', border_colors()),
+                RenderChar::new('╗', border_colors()),
+                RenderChar::new('╚', border_colors()),
+                RenderChar::new('╝', border_colors()),
+                RenderChar::new('═', border_colors()),
+                RenderChar::new('║', border_colors()),
+            ];
+            let r = RectangleShape::new(0, 0, 1, 1, char_set[0].clone(), false);
             buffer.draw(&r);
 
-            let r = RectangleShape::new(
-                (gw + 1) as isize,
-                0,
-                1,
-                1,
-                RenderChar::new(
-                    '┓',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
-                false,
-            );
+            let r = RectangleShape::new((gw + 1) as isize, 0, 1, 1, char_set[1].clone(), false);
             buffer.draw(&r);
 
-            let r = RectangleShape::new(
-                0,
-                (gh + 1) as isize,
-                1,
-                1,
-                RenderChar::new(
-                    '┗',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
-                false,
-            );
+            let r = RectangleShape::new(0, (gh + 1) as isize, 1, 1, char_set[2].clone(), false);
             buffer.draw(&r);
 
             let r = RectangleShape::new(
@@ -181,31 +163,12 @@ async fn main() {
                 (gh + 1) as isize,
                 1,
                 1,
-                RenderChar::new(
-                    '┛',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
+                char_set[3].clone(),
                 false,
             );
             buffer.draw(&r);
 
-            let r = RectangleShape::new(
-                1,
-                0,
-                gw as isize,
-                1,
-                RenderChar::new(
-                    '━',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
-                false,
-            );
+            let r = RectangleShape::new(1, 0, gw as isize, 1, char_set[4].clone(), false);
             buffer.draw(&r);
 
             let r = RectangleShape::new(
@@ -213,31 +176,12 @@ async fn main() {
                 gh as isize + 1,
                 gw as isize,
                 1,
-                RenderChar::new(
-                    '━',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
+                char_set[4].clone(),
                 false,
             );
             buffer.draw(&r);
 
-            let r = RectangleShape::new(
-                0,
-                1,
-                1,
-                gh as isize,
-                RenderChar::new(
-                    '┃',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
-                false,
-            );
+            let r = RectangleShape::new(0, 1, 1, gh as isize, char_set[5].clone(), false);
             buffer.draw(&r);
 
             let r = RectangleShape::new(
@@ -245,13 +189,7 @@ async fn main() {
                 1,
                 1,
                 gh as isize,
-                RenderChar::new(
-                    '┃',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
+                char_set[5].clone(),
                 false,
             );
             buffer.draw(&r);
@@ -291,10 +229,10 @@ async fn main() {
             buffer.draw(&r);
         }
 
-        let my_snake = game.get_snake("just".to_string());
-        for part_index in (1..my_snake.body.len()).rev() {
-            let part = my_snake.body[part_index];
-            let next_part = my_snake.body[part_index - 1];
+        let my_snake = game.get_snake("just".to_string()).unwrap();
+        for part_index in (1..my_snake.get_body().len()).rev() {
+            let part = my_snake.get_body()[part_index];
+            let next_part = my_snake.get_body()[part_index - 1];
             let diff_next = if part.0 - next_part.0 == 1 {
                 4
             } else if part.0 - next_part.0 == -1 {
@@ -308,12 +246,12 @@ async fn main() {
             };
 
             let cur_char = if use_fancy {
-                let char_set = if use_unicode {
+                let char_set = if true {
                     ['│', '─', '.', '└', '┐', '┘', '┌']
                 } else {
                     ['|', '-', '.', '\\', '\\', '/', '/']
                 };
-                if part_index == my_snake.body.len() - 1 {
+                if part_index == my_snake.get_body().len() - 1 {
                     if diff_next == 1 || diff_next == 3 {
                         char_set[0]
                     } else if diff_next == 2 || diff_next == 4 {
@@ -322,7 +260,7 @@ async fn main() {
                         char_set[2]
                     }
                 } else {
-                    let prev_part = my_snake.body[part_index + 1];
+                    let prev_part = my_snake.get_body()[part_index + 1];
                     let diff_prev = if part.0 - prev_part.0 == 1 {
                         4
                     } else if part.0 - prev_part.0 == -1 {
@@ -372,8 +310,8 @@ async fn main() {
         }
 
         let r = RectangleShape::new(
-            (my_snake.head.0 + 1) as isize,
-            (my_snake.head.1 + 1) as isize,
+            (my_snake.get_body()[0].0 + 1) as isize,
+            (my_snake.get_body()[0].1 + 1) as isize,
             1,
             1,
             RenderChar::new(
@@ -387,12 +325,51 @@ async fn main() {
         );
         buffer.draw(&r);
 
-        clear_term();
+        if use_debug {
+            for x in 0..gw + 2 {
+                for y in 0..gh + 2 {
+                    let cc = buffer.get((x) as isize, (y) as isize);
+                    let o = game
+                        .get_owners_tables()
+                        .get_cell(x as isize - 1, y as isize - 1);
+                    let nc = RenderChar::new(
+                        cc.char,
+                        match o {
+                            Cell::Player(_) => Colors {
+                                foreground: cc.colors.foreground,
+                                background: Some(Color::Red),
+                            },
+                            Cell::Food => Colors {
+                                foreground: cc.colors.foreground,
+                                background: Some(Color::Magenta),
+                            },
+                            Cell::Wall | Cell::Void => Colors {
+                                foreground: cc.colors.foreground,
+                                background: Some(Color::DarkGrey),
+                            },
+                            Cell::Empty => Colors {
+                                foreground: cc.colors.foreground,
+                                background: Some(Color::Green),
+                            },
+                        },
+                    );
+                    buffer.put((x) as isize, (y) as isize, nc);
+                }
+            }
+        }
+
+        stdout.queue(Clear(ClearType::All)).unwrap();
         buffer.render_to(&mut stdout);
+
         stdout.flush().unwrap();
 
-        thread::sleep(Duration::from_millis(1000 / 10));
+        if use_slow_mo {
+            thread::sleep(Duration::from_millis(1000 / 1));
+        } else {
+            thread::sleep(Duration::from_millis(1000 / 10));
+        }
     }
+    stdout.execute(LeaveAlternateScreen).unwrap();
     stdout.execute(event::DisableMouseCapture).unwrap();
     terminal::disable_raw_mode().unwrap();
 }
