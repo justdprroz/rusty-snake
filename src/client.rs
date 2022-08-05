@@ -1,20 +1,18 @@
 // #![allow(dead_code)]
 
 // Std Stuff
+use logic::{Cell, Direction, Game};
+use net::{Signal, SnakeEvent, SnakeEventType};
 use std::io::{stdout, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
-use logic::{Cell, Direction, Game};
-use net::{Signal, SnakeEvent};
-
-// Tokio Stuff
-use tokio::sync::mpsc;
-
 // Crossterm
+use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::style::{Color, Colors};
-use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use crossterm::{event, terminal, ExecutableCommand, QueueableCommand};
 
 // Own Modules
@@ -35,95 +33,144 @@ fn border_colors() -> Colors {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
+    let (gw, gh) = (40, 20);
+    let mut game: Game = Game::new(gw, gh, 4, 5, true);
+    game.add_missing_food();
+    loop {
+        loop {
+            match rx.try_recv() {
+                Ok(event) => game.handle_events(event.event_type, event.event_owner),
+                Err(_) => break,
+            }
+        }
+        game.step();
+        game.add_missing_food();
+        tx.send(game.clone()).unwrap();
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     terminal::enable_raw_mode().unwrap();
     let mut stdout = BufWriter::new(stdout());
-    stdout.execute(event::EnableMouseCapture).unwrap();
     stdout.execute(EnterAlternateScreen).unwrap();
-    let (tx, mut rx) = mpsc::channel::<event::Event>(32);
+    stdout.execute(Hide).unwrap();
+    stdout.execute(event::EnableMouseCapture).unwrap();
 
     // spawn user input system
-    tokio::spawn(async move {
-        while APP_RUNNING.load(Ordering::Relaxed) {
-            if event::poll(Duration::from_millis(100)).unwrap() {
-                tx.send(event::read().unwrap()).await.unwrap();
-            };
-        }
-    });
+    // tokio::spawn(async move {
+    //     while APP_RUNNING.load(Ordering::Relaxed) {
+    //         if event::poll(Duration::from_millis(100)).unwrap() {
+    //             tx.send(event::read().unwrap()).await.unwrap();
+    //         };
+    //     }
+    // });
 
     let (width, height) = (
         terminal::size().unwrap().0 as usize,
         terminal::size().unwrap().1 as usize,
     );
+
     let mut buffer = RenderBuffer::new(width, height);
 
     // Game Stuff
-    let (gw, gh) = (30, 30);
-    let mut game: Game = Game::new(gw, gh, 5, 5, true);
-    game.add_missing_food();
-    game.add_player("just".to_string());
+    let mut game: Game = rx.recv().unwrap();
+    tx.send(SnakeEvent {
+        event_type: SnakeEventType::Signal(Signal::Connect),
+        event_owner: "just".to_string(),
+    })
+    .unwrap();
+    let (gw, gh) = (game.size.0, game.size.1);
 
-    let mut time = SystemTime::now();
+    // let mut time = SystemTime::now();
 
     let mut use_fancy: bool = true;
     let mut use_unicode: bool = false;
     let mut use_debug: bool = false;
     let mut use_slow_mo: bool = false;
+    let mut use_rgb: bool = true;
 
     // Game Loop
     'game_loop: while APP_RUNNING.load(Ordering::Relaxed) {
-        stdout
-            .queue(SetTitle((time.elapsed().unwrap().as_micros()) as u64))
-            .unwrap();
-        time = SystemTime::now();
+        // stdout
+        //     .queue(SetTitle((time.elapsed().unwrap().as_micros()) as u64))
+        //     .unwrap();
+        // time = SystemTime::now();
         // get_input
         loop {
-            if let Ok(input) = rx.try_recv() {
-                match input {
+            if event::poll(Duration::from_millis(10)).unwrap() {
+                match event::read().unwrap() {
                     event::Event::Key(event) => match event.code {
                         event::KeyCode::Char(c) => match c {
-                            'w' => game.handle_events(
-                                SnakeEvent::Movement(Direction::Up),
-                                "just".to_string(),
-                            ),
-                            'a' => game.handle_events(
-                                SnakeEvent::Movement(Direction::Left),
-                                "just".to_string(),
-                            ),
-                            's' => game.handle_events(
-                                SnakeEvent::Movement(Direction::Down),
-                                "just".to_string(),
-                            ),
-                            'd' => game.handle_events(
-                                SnakeEvent::Movement(Direction::Right),
-                                "just".to_string(),
-                            ),
+                            'w' => tx
+                                .send(SnakeEvent {
+                                    event_type: SnakeEventType::Movement(Direction::Up),
+                                    event_owner: "just".to_string(),
+                                })
+                                .unwrap(),
+                            'a' => tx
+                                .send(SnakeEvent {
+                                    event_type: SnakeEventType::Movement(Direction::Left),
+                                    event_owner: "just".to_string(),
+                                })
+                                .unwrap(),
+                            's' => tx
+                                .send(SnakeEvent {
+                                    event_type: SnakeEventType::Movement(Direction::Down),
+                                    event_owner: "just".to_string(),
+                                })
+                                .unwrap(),
+                            'd' => tx
+                                .send(SnakeEvent {
+                                    event_type: SnakeEventType::Movement(Direction::Right),
+                                    event_owner: "just".to_string(),
+                                })
+                                .unwrap(),
+                            // 'r' => {
+                            //     tx.send(SnakeEvent {
+                            //         event_type: SnakeEventType::Signal(Signal::Disconnect),
+                            //         event_owner: "just".to_string(),
+                            //     })
+                            //     .unwrap();
+                            //     tx.send(SnakeEvent {
+                            //         event_type: SnakeEventType::Signal(Signal::Connect),
+                            //         event_owner: "just".to_string(),
+                            //     })
+                            //     .unwrap();
+                            // }
                             'u' => use_unicode = !use_unicode,
+                            'c' => use_rgb = !use_rgb,
                             'f' => use_fancy = !use_fancy,
                             '\\' => use_debug = !use_debug,
                             '/' => use_slow_mo = !use_slow_mo,
                             _ => {}
                         },
                         event::KeyCode::Esc => {
-                            game.handle_events(
-                                SnakeEvent::Signal(Signal::Disconnect),
-                                "just".to_string(),
-                            );
+                            tx.send(SnakeEvent {
+                                event_type: SnakeEventType::Signal(Signal::Disconnect),
+                                event_owner: "just".to_string(),
+                            })
+                            .unwrap();
                             APP_RUNNING.store(false, Ordering::Relaxed);
                             break 'game_loop;
                         }
-                        event::KeyCode::Enter => game.handle_events(
-                            SnakeEvent::Movement(Direction::Stop),
-                            "just".to_string(),
-                        ),
+                        event::KeyCode::Enter => tx
+                            .send(SnakeEvent {
+                                event_type: SnakeEventType::Movement(Direction::Stop),
+                                event_owner: "just".to_string(),
+                            })
+                            .unwrap(),
                         _ => {}
                     },
-                    event::Event::Resize(w, h) => buffer.resize(w as usize, h as usize),
+                    event::Event::Resize(_, _) => buffer.resize(
+                        terminal::size().unwrap().0 as usize,
+                        terminal::size().unwrap().1 as usize,
+                    ),
                     event::Event::Mouse(event) => match event.kind {
                         event::MouseEventKind::Down(_) => {
                             stdout
-                                .queue(SetTitle(format!("{}:{}", event.column, event.row)))
+                                .execute(SetTitle(format!("{}:{}", event.column, event.row)))
                                 .unwrap();
                         }
                         _ => {}
@@ -135,9 +182,9 @@ async fn main() {
         }
         // do logic
 
-        game.step();
+        game = rx.recv().unwrap();
 
-        //draw
+        //dra
         buffer.clear(RenderChar::empty());
 
         if use_fancy {
@@ -229,101 +276,138 @@ async fn main() {
             buffer.draw(&r);
         }
 
-        let my_snake = game.get_snake("just".to_string()).unwrap();
-        for part_index in (1..my_snake.get_body().len()).rev() {
-            let part = my_snake.get_body()[part_index];
-            let next_part = my_snake.get_body()[part_index - 1];
-            let diff_next = if part.0 - next_part.0 == 1 {
-                4
-            } else if part.0 - next_part.0 == -1 {
-                2
-            } else if part.1 - next_part.1 == 1 {
-                1
-            } else if part.1 - next_part.1 == -1 {
-                3
-            } else {
-                5
-            };
-
-            let cur_char = if use_fancy {
-                let char_set = if true {
-                    ['│', '─', '.', '└', '┐', '┘', '┌']
+        if let Some(my_snake) = game.get_snake("just".to_string()) {
+            for part_index in (1..my_snake.get_body().len()).rev() {
+                let part = my_snake.get_body()[part_index];
+                let next_part = my_snake.get_body()[part_index - 1];
+                let diff_next = if part.0 - next_part.0 == 1 {
+                    4
+                } else if part.0 - next_part.0 == -1 {
+                    2
+                } else if part.1 - next_part.1 == 1 {
+                    1
+                } else if part.1 - next_part.1 == -1 {
+                    3
                 } else {
-                    ['|', '-', '.', '\\', '\\', '/', '/']
+                    5
                 };
-                if part_index == my_snake.get_body().len() - 1 {
-                    if diff_next == 1 || diff_next == 3 {
-                        char_set[0]
-                    } else if diff_next == 2 || diff_next == 4 {
-                        char_set[1]
+
+                let cur_char = if use_fancy {
+                    let char_set = if true {
+                        ['│', '─', '.', '└', '┐', '┘', '┌']
                     } else {
-                        char_set[2]
+                        ['|', '-', '.', '\\', '\\', '/', '/']
+                    };
+                    if part_index == my_snake.get_body().len() - 1 {
+                        if diff_next == 1 || diff_next == 3 {
+                            char_set[0]
+                        } else if diff_next == 2 || diff_next == 4 {
+                            char_set[1]
+                        } else {
+                            char_set[2]
+                        }
+                    } else {
+                        let prev_part = my_snake.get_body()[part_index + 1];
+                        let diff_prev = if part.0 - prev_part.0 == 1 {
+                            4
+                        } else if part.0 - prev_part.0 == -1 {
+                            2
+                        } else if part.1 - prev_part.1 == 1 {
+                            1
+                        } else if part.1 - prev_part.1 == -1 {
+                            3
+                        } else {
+                            5
+                        };
+                        if diff_next == 1 && diff_prev == 2 || diff_next == 2 && diff_prev == 1 {
+                            char_set[3]
+                        } else if diff_next == 3 && diff_prev == 4
+                            || diff_next == 4 && diff_prev == 3
+                        {
+                            char_set[4]
+                        } else if diff_next == 1 && diff_prev == 4
+                            || diff_next == 4 && diff_prev == 1
+                        {
+                            char_set[5]
+                        } else if diff_next == 3 && diff_prev == 2
+                            || diff_next == 2 && diff_prev == 3
+                        {
+                            char_set[6]
+                        } else if diff_next == 1 && diff_prev == 3
+                            || diff_next == 3 && diff_prev == 1
+                        {
+                            char_set[0]
+                        } else if diff_next == 2 && diff_prev == 4
+                            || diff_next == 4 && diff_prev == 2
+                        {
+                            char_set[1]
+                        } else {
+                            char_set[2]
+                        }
                     }
                 } else {
-                    let prev_part = my_snake.get_body()[part_index + 1];
-                    let diff_prev = if part.0 - prev_part.0 == 1 {
-                        4
-                    } else if part.0 - prev_part.0 == -1 {
-                        2
-                    } else if part.1 - prev_part.1 == 1 {
-                        1
-                    } else if part.1 - prev_part.1 == -1 {
-                        3
-                    } else {
-                        5
-                    };
-                    if diff_next == 1 && diff_prev == 2 || diff_next == 2 && diff_prev == 1 {
-                        char_set[3]
-                    } else if diff_next == 3 && diff_prev == 4 || diff_next == 4 && diff_prev == 3 {
-                        char_set[4]
-                    } else if diff_next == 1 && diff_prev == 4 || diff_next == 4 && diff_prev == 1 {
-                        char_set[5]
-                    } else if diff_next == 3 && diff_prev == 2 || diff_next == 2 && diff_prev == 3 {
-                        char_set[6]
-                    } else if diff_next == 1 && diff_prev == 3 || diff_next == 3 && diff_prev == 1 {
-                        char_set[0]
-                    } else if diff_next == 2 && diff_prev == 4 || diff_next == 4 && diff_prev == 2 {
-                        char_set[1]
-                    } else {
-                        char_set[2]
-                    }
-                }
-            } else {
-                '0'
-            };
+                    '0'
+                };
+
+                let r = RectangleShape::new(
+                    (part.0 + 1) as isize,
+                    (part.1 + 1) as isize,
+                    1,
+                    1,
+                    RenderChar::new(
+                        cur_char,
+                        Colors {
+                            foreground: Some(Color::Yellow),
+                            background: None,
+                        },
+                    ),
+                    false,
+                );
+                buffer.draw(&r);
+            }
 
             let r = RectangleShape::new(
-                (part.0 + 1) as isize,
-                (part.1 + 1) as isize,
+                (my_snake.get_body()[0].0 + 1) as isize,
+                (my_snake.get_body()[0].1 + 1) as isize,
                 1,
                 1,
                 RenderChar::new(
-                    cur_char,
+                    '@',
                     Colors {
-                        foreground: Some(Color::Yellow),
+                        foreground: Some(Color::Green),
                         background: None,
                     },
                 ),
                 false,
             );
             buffer.draw(&r);
+        } else {
+            tx.send(SnakeEvent {
+                event_type: SnakeEventType::Signal(Signal::Connect),
+                event_owner: "just".to_string(),
+            })
+            .unwrap();
         }
 
-        let r = RectangleShape::new(
-            (my_snake.get_body()[0].0 + 1) as isize,
-            (my_snake.get_body()[0].1 + 1) as isize,
-            1,
-            1,
-            RenderChar::new(
-                '@',
-                Colors {
-                    foreground: Some(Color::Green),
-                    background: None,
-                },
-            ),
-            false,
-        );
-        buffer.draw(&r);
+        let colors = if use_rgb {
+            [
+                Some(Color::Rgb { r: 127, g: 0, b: 0 }),
+                Some(Color::Rgb {
+                    r: 127,
+                    g: 0,
+                    b: 127,
+                }),
+                Some(Color::Rgb { r: 0, g: 0, b: 0 }),
+                Some(Color::Rgb { r: 0, g: 127, b: 0 }),
+            ]
+        } else {
+            [
+                Some(Color::Red),
+                Some(Color::Magenta),
+                Some(Color::Black),
+                Some(Color::DarkGreen),
+            ]
+        };
 
         if use_debug {
             for x in 0..gw + 2 {
@@ -337,19 +421,19 @@ async fn main() {
                         match o {
                             Cell::Player(_) => Colors {
                                 foreground: cc.colors.foreground,
-                                background: Some(Color::Red),
+                                background: colors[0],
                             },
                             Cell::Food => Colors {
                                 foreground: cc.colors.foreground,
-                                background: Some(Color::Magenta),
+                                background: colors[1],
                             },
                             Cell::Wall | Cell::Void => Colors {
                                 foreground: cc.colors.foreground,
-                                background: Some(Color::DarkGrey),
+                                background: colors[2],
                             },
                             Cell::Empty => Colors {
                                 foreground: cc.colors.foreground,
-                                background: Some(Color::Green),
+                                background: colors[3],
                             },
                         },
                     );
@@ -358,18 +442,28 @@ async fn main() {
             }
         }
 
-        stdout.queue(Clear(ClearType::All)).unwrap();
+        stdout.queue(MoveTo(0, 0)).unwrap();
         buffer.render_to(&mut stdout);
 
         stdout.flush().unwrap();
-
-        if use_slow_mo {
-            thread::sleep(Duration::from_millis(1000 / 1));
-        } else {
-            thread::sleep(Duration::from_millis(1000 / 10));
-        }
     }
     stdout.execute(LeaveAlternateScreen).unwrap();
     stdout.execute(event::DisableMouseCapture).unwrap();
+    stdout.execute(Show).unwrap();
     terminal::disable_raw_mode().unwrap();
+}
+
+#[tokio::main]
+async fn main() {
+    let (tx_game, rx_game) = channel::<Game>();
+    let (tx_event, rx_event) = channel::<SnakeEvent>();
+    thread::Builder::new()
+        .name("Server Thread".to_string())
+        .spawn(move || server(tx_game, rx_event))
+        .unwrap();
+    let client_handle = thread::Builder::new()
+        .name("Client Thread".to_string())
+        .spawn(move || client(rx_game, tx_event))
+        .unwrap();
+    client_handle.join().unwrap();
 }

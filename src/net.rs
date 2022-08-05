@@ -1,12 +1,16 @@
 use crate::logic::Direction;
 
-#[derive(Debug)]
 pub enum Signal {
     Disconnect,
+    Connect
 }
 
-#[derive(Debug)]
-pub enum SnakeEvent {
+pub enum SnakeEventType {
     Movement(Direction),
-    Signal(Signal)
+    Signal(Signal),
+}
+
+pub struct SnakeEvent {
+    pub event_type: SnakeEventType,
+    pub event_owner: String
 }

@@ -1,4 +1,5 @@
-// Todo check windows compatibility
+// TODO: Fix windows compatibility
+// Issues: Everything seems broken
 use crossterm::{
     style::{Colors, ResetColor, SetColors, Print},
     QueueableCommand,
