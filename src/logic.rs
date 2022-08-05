@@ -1,8 +1,9 @@
 use rand::Rng;
+use serde::{Serialize, Deserialize};
 
 use crate::net::{Signal, SnakeEventType};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Direction {
     Up,
     Left,
@@ -11,15 +12,15 @@ pub enum Direction {
     Stop,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snake {
-    name: String,
-    id: usize,
-    body: Vec<(isize, isize)>,
-    head: (isize, isize),
-    direction: Direction,
-    moved_from: Direction,
-    alive: bool,
+    pub name: String,
+    pub id: usize,
+    pub body: Vec<(isize, isize)>,
+    pub head: (isize, isize),
+    pub direction: Direction,
+    pub moved_from: Direction,
+    pub alive: bool,
 }
 
 impl Snake {
@@ -40,7 +41,7 @@ impl Snake {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Cell {
     Void,
     Wall,
@@ -49,7 +50,7 @@ pub enum Cell {
     Empty,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CellManager {
     size: (usize, usize),
     data: Vec<Vec<Cell>>,
@@ -88,17 +89,17 @@ impl CellManager {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
     // Settings
     pub size: (usize, usize),
-    food_amount: usize,
-    max_players: usize,
-    teleport: bool,
+    pub food_amount: usize,
+    pub max_players: usize,
+    pub teleport: bool,
     // Data
-    snakes: Vec<Snake>,
-    food: Vec<(isize, isize)>,
-    cells: CellManager,
+    pub snakes: Vec<Snake>,
+    pub food: Vec<(isize, isize)>,
+    pub cells: CellManager,
 }
 
 impl Game {
@@ -144,6 +145,9 @@ impl Game {
 
     pub fn add_player(&mut self, name: String) -> bool {
         if self.snakes.len() >= self.max_players {
+            return false;
+        }
+        if let Some(_) = self.snakes.iter().position(|s| *s.name == name) {
             return false;
         }
         let mut rng = rand::thread_rng();
