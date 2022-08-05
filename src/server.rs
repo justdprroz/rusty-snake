@@ -1,8 +1,8 @@
-use std::thread;
+use std::{thread, fs};
 use std::time::Duration;
 
+use lazy_static::lazy_static;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
-
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
@@ -33,6 +33,12 @@ fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
     }
 }
 
+lazy_static! {
+    pub static ref CONF: toml::Value =
+        toml::from_str(&fs::read_to_string("Server.toml").unwrap()).unwrap();
+    pub static ref SERVER_ADDRESS: String = CONF["server_address"].as_str().unwrap().to_string();
+}
+
 #[tokio::main]
 async fn main() {
     println!("Server started...");
@@ -46,7 +52,7 @@ async fn main() {
         .spawn(move || server(tx_game_copy, tx_event_copy.subscribe()))
         .unwrap();
 
-    let listener = TcpListener::bind("127.0.0.1:42069").await.unwrap();
+    let listener = TcpListener::bind(SERVER_ADDRESS.to_string()).await.unwrap();
     loop {
         let (mut socket, _addr) = listener.accept().await.unwrap();
         println!("Got new connection");
@@ -59,8 +65,8 @@ async fn main() {
                     let buf = bincode::serialize(&g).unwrap();
                     socket.write_all(&buf).await.unwrap();
                 }
-                if let Ok(_) = socket.try_read(&mut buf) {
-                    let event: SnakeEvent = bincode::deserialize(&buf).unwrap();
+                if let Ok(bytes) = socket.try_read(&mut buf) {
+                    let event: SnakeEvent = bincode::deserialize(&buf[..bytes]).unwrap();
                     tx_event.send(event).unwrap();
                 };
             }

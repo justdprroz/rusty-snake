@@ -1,11 +1,13 @@
 // #![allow(dead_code)]
 
+use lazy_static::lazy_static;
 // Std Stuff
 use logic::{Cell, Direction, Game};
 use net::{Signal, SnakeEvent, SnakeEventType};
+use std::any::{Any};
 use std::io::{stdout, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::{thread, fs};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -60,8 +62,8 @@ async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpS
             let buf = bincode::serialize(&event).unwrap();
             socket.write_all(&buf).await.unwrap();
         }
-        if let Ok(_bytes) = socket.try_read(&mut buf) {
-            let game: Game = bincode::deserialize(&buf).unwrap();
+        if let Ok(bytes) = socket.try_read(&mut buf) {
+            let game: Game = bincode::deserialize(&buf[..bytes]).unwrap();
             tx.send(game).unwrap();
         };
     }
@@ -88,7 +90,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     println!("Got Game Copy");
     tx.send(SnakeEvent {
         event_type: SnakeEventType::Signal(Signal::Connect),
-        event_owner: "justdprroz".to_string(),
+        event_owner: USERNAME.to_string(),
     })
     .unwrap();
     let (gw, gh) = (game.size.0, game.size.1);
@@ -121,42 +123,42 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                                     'w' => {
                                         tx.send(SnakeEvent {
                                             event_type: SnakeEventType::Movement(Direction::Up),
-                                            event_owner: "justdprroz".to_string(),
+                                            event_owner: USERNAME.to_string(),
                                         })
                                         .unwrap();
                                     }
                                     'a' => {
                                         tx.send(SnakeEvent {
                                             event_type: SnakeEventType::Movement(Direction::Left),
-                                            event_owner: "justdprroz".to_string(),
+                                            event_owner: USERNAME.to_string(),
                                         })
                                         .unwrap();
                                     }
                                     's' => {
                                         tx.send(SnakeEvent {
                                             event_type: SnakeEventType::Movement(Direction::Down),
-                                            event_owner: "justdprroz".to_string(),
+                                            event_owner: USERNAME.to_string(),
                                         })
                                         .unwrap();
                                     }
                                     'd' => {
                                         tx.send(SnakeEvent {
                                             event_type: SnakeEventType::Movement(Direction::Right),
-                                            event_owner: "justdprroz".to_string(),
+                                            event_owner: USERNAME.to_string(),
                                         })
                                         .unwrap();
                                     }
                                     'q' => {
                                         tx.send(SnakeEvent {
                                             event_type: SnakeEventType::Signal(Signal::Disconnect),
-                                            event_owner: "justdprroz".to_string(),
+                                            event_owner: USERNAME.to_string().to_owned(),
                                         })
                                         .unwrap();
                                     }
                                     'r' => {
                                         tx.send(SnakeEvent {
                                             event_type: SnakeEventType::Signal(Signal::Connect),
-                                            event_owner: "justdprroz".to_string(),
+                                            event_owner: USERNAME.to_string(),
                                         })
                                         .unwrap();
                                     }
@@ -170,7 +172,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                                 event::KeyCode::Esc => {
                                     tx.send(SnakeEvent {
                                         event_type: SnakeEventType::Signal(Signal::Disconnect),
-                                        event_owner: "justdprroz".to_string(),
+                                        event_owner: USERNAME.to_string(),
                                     })
                                     .unwrap();
                                     APP_RUNNING.store(false, Ordering::Relaxed);
@@ -179,7 +181,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                                 event::KeyCode::Enter => {
                                     tx.send(SnakeEvent {
                                         event_type: SnakeEventType::Movement(Direction::Stop),
-                                        event_owner: "justdprroz".to_string(),
+                                        event_owner: USERNAME.to_string(),
                                     })
                                     .unwrap();
                                 }
@@ -304,7 +306,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
         let mut my_snake_found: bool = false;
 
         for snake in &game.snakes {
-            let (tail_color, head_color) = if snake.name == "justdprroz".to_string() {
+            let (tail_color, head_color) = if snake.name == USERNAME.to_string() {
                 my_snake_found = true;
                 (Some(Color::Yellow), Some(Color::Green))
             } else {
@@ -418,7 +420,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
         if !my_snake_found {
             tx.send(SnakeEvent {
                 event_type: SnakeEventType::Signal(Signal::Connect),
-                event_owner: "justdprroz".to_string(),
+                event_owner: USERNAME.to_string(),
             })
             .unwrap();
         }
@@ -487,13 +489,23 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     terminal::disable_raw_mode().unwrap();
 }
 
+lazy_static! {
+    pub static ref CONF: toml::Value = toml::from_str(&fs::read_to_string("Client.toml").unwrap()).unwrap();
+    pub static ref USERNAME: String = CONF["username"].as_str().unwrap().to_string();
+    pub static ref SERVER_ADDRESS: String = CONF["server_address"].as_str().unwrap().to_string();
+}
+
 #[tokio::main]
 async fn main() {
+
+    println!("{}", *SERVER_ADDRESS);
+    println!("{}", USERNAME.to_string());
+
     let (tx_game, rx_game) = channel::<Game>(32);
     let (tx_event, rx_event) = channel::<SnakeEvent>(32);
 
     let _use_remote = true;
-    let stream = TcpStream::connect("127.0.0.1:42069").await.unwrap();
+    let stream = TcpStream::connect(SERVER_ADDRESS.to_string()).await.unwrap();
     // if use_remote {
     //     let tx_game = tx_game.clone();
     //     let rx_event = tx_event.subscribe();
