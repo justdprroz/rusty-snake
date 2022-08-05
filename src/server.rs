@@ -60,12 +60,15 @@ async fn main() {
         let tx_event = tx_event.clone();
         tokio::spawn(async move {
             loop {
-                let mut buf = [0u8; 1024];
+                let mut buf = [0u8; 1_000_000];
                 if let Ok(g) = rx_game.try_recv() {
                     let buf = bincode::serialize(&g).unwrap();
                     socket.write_all(&buf).await.unwrap();
                 }
                 if let Ok(bytes) = socket.try_read(&mut buf) {
+                    if bytes == 0 {
+                        return
+                    }
                     let event: SnakeEvent = bincode::deserialize(&buf[..bytes]).unwrap();
                     tx_event.send(event).unwrap();
                 };

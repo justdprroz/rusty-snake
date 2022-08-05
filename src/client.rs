@@ -4,11 +4,10 @@ use lazy_static::lazy_static;
 // Std Stuff
 use logic::{Cell, Direction, Game};
 use net::{Signal, SnakeEvent, SnakeEventType};
-use std::any::{Any};
 use std::io::{stdout, BufWriter, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{thread, fs};
 use std::time::Duration;
+use std::{fs, thread};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
@@ -56,21 +55,26 @@ fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
 }
 
 async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpStream) {
-    loop {
+    println!("Entering Socket Thread");
+    while APP_RUNNING.load(Ordering::Relaxed) {
         let mut buf = [0u8; 1_000_000];
         if let Ok(event) = rx.try_recv() {
             let buf = bincode::serialize(&event).unwrap();
             socket.write_all(&buf).await.unwrap();
         }
         if let Ok(bytes) = socket.try_read(&mut buf) {
+            if bytes == 0 {
+                return;
+            }
             let game: Game = bincode::deserialize(&buf[..bytes]).unwrap();
             tx.send(game).unwrap();
         };
     }
+    println!("Exiting Socket Thread");
 }
 
 async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
-    println!("Entered Game loop");
+    println!("Entered Render Thread");
     terminal::enable_raw_mode().unwrap();
     let mut stdout = BufWriter::new(stdout());
     stdout.execute(EnterAlternateScreen).unwrap();
@@ -487,17 +491,18 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     stdout.execute(event::DisableMouseCapture).unwrap();
     stdout.execute(Show).unwrap();
     terminal::disable_raw_mode().unwrap();
+    println!("Exiting Render Thread");
 }
 
 lazy_static! {
-    pub static ref CONF: toml::Value = toml::from_str(&fs::read_to_string("Client.toml").unwrap()).unwrap();
+    pub static ref CONF: toml::Value =
+        toml::from_str(&fs::read_to_string("Client.toml").unwrap()).unwrap();
     pub static ref USERNAME: String = CONF["username"].as_str().unwrap().to_string();
     pub static ref SERVER_ADDRESS: String = CONF["server_address"].as_str().unwrap().to_string();
 }
 
 #[tokio::main]
 async fn main() {
-
     println!("{}", *SERVER_ADDRESS);
     println!("{}", USERNAME.to_string());
 
@@ -505,7 +510,9 @@ async fn main() {
     let (tx_event, rx_event) = channel::<SnakeEvent>(32);
 
     let _use_remote = true;
-    let stream = TcpStream::connect(SERVER_ADDRESS.to_string()).await.unwrap();
+    let stream = TcpStream::connect(SERVER_ADDRESS.to_string())
+        .await
+        .unwrap();
     // if use_remote {
     //     let tx_game = tx_game.clone();
     //     let rx_event = tx_event.subscribe();
@@ -530,5 +537,7 @@ async fn main() {
         .unwrap();
     println!("Spawned Client thread");
     client_handle.join().unwrap().await;
+    _socket_handle.abort();
     // socket_handle.await.unwrap();
+    println!("Exiting Main Thread");
 }
