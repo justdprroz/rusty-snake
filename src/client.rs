@@ -35,7 +35,7 @@ fn border_colors() -> Colors {
 
 fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
     let (gw, gh) = (40, 20);
-    let mut game: Game = Game::new(gw, gh, 4, 5, true);
+    let mut game: Game = Game::new(gw, gh, 10, 5, true);
     game.add_missing_food();
     loop {
         loop {
@@ -98,91 +98,99 @@ fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
         //     .unwrap();
         // time = SystemTime::now();
         // get_input
-        loop {
-            if event::poll(Duration::from_millis(10)).unwrap() {
-                match event::read().unwrap() {
-                    event::Event::Key(event) => match event.code {
-                        event::KeyCode::Char(c) => match c {
-                            'w' => tx
-                                .send(SnakeEvent {
-                                    event_type: SnakeEventType::Movement(Direction::Up),
-                                    event_owner: "just".to_string(),
-                                })
-                                .unwrap(),
-                            'a' => tx
-                                .send(SnakeEvent {
-                                    event_type: SnakeEventType::Movement(Direction::Left),
-                                    event_owner: "just".to_string(),
-                                })
-                                .unwrap(),
-                            's' => tx
-                                .send(SnakeEvent {
-                                    event_type: SnakeEventType::Movement(Direction::Down),
-                                    event_owner: "just".to_string(),
-                                })
-                                .unwrap(),
-                            'd' => tx
-                                .send(SnakeEvent {
-                                    event_type: SnakeEventType::Movement(Direction::Right),
-                                    event_owner: "just".to_string(),
-                                })
-                                .unwrap(),
-                            // 'r' => {
-                            //     tx.send(SnakeEvent {
-                            //         event_type: SnakeEventType::Signal(Signal::Disconnect),
-                            //         event_owner: "just".to_string(),
-                            //     })
-                            //     .unwrap();
-                            //     tx.send(SnakeEvent {
-                            //         event_type: SnakeEventType::Signal(Signal::Connect),
-                            //         event_owner: "just".to_string(),
-                            //     })
-                            //     .unwrap();
-                            // }
-                            'u' => use_unicode = !use_unicode,
-                            'c' => use_rgb = !use_rgb,
-                            'f' => use_fancy = !use_fancy,
-                            '\\' => use_debug = !use_debug,
-                            '/' => use_slow_mo = !use_slow_mo,
-                            _ => {}
-                        },
-                        event::KeyCode::Esc => {
-                            tx.send(SnakeEvent {
-                                event_type: SnakeEventType::Signal(Signal::Disconnect),
-                                event_owner: "just".to_string(),
-                            })
-                            .unwrap();
-                            APP_RUNNING.store(false, Ordering::Relaxed);
-                            break 'game_loop;
-                        }
-                        event::KeyCode::Enter => tx
-                            .send(SnakeEvent {
-                                event_type: SnakeEventType::Movement(Direction::Stop),
-                                event_owner: "just".to_string(),
-                            })
-                            .unwrap(),
-                        _ => {}
-                    },
-                    event::Event::Resize(_, _) => buffer.resize(
-                        terminal::size().unwrap().0 as usize,
-                        terminal::size().unwrap().1 as usize,
-                    ),
-                    event::Event::Mouse(event) => match event.kind {
-                        event::MouseEventKind::Down(_) => {
-                            stdout
-                                .execute(SetTitle(format!("{}:{}", event.column, event.row)))
-                                .unwrap();
-                        }
-                        _ => {}
-                    },
-                };
+        'events_or_game: loop {
+            if let Ok(new_game) = rx.try_recv() {
+                game = new_game;
+                break 'events_or_game;
             } else {
-                break;
+                'events: loop {
+                    if event::poll(Duration::from_millis(10)).unwrap() {
+                        match event::read().unwrap() {
+                            event::Event::Key(event) => match event.code {
+                                event::KeyCode::Char(c) => match c {
+                                    'w' => tx
+                                        .send(SnakeEvent {
+                                            event_type: SnakeEventType::Movement(Direction::Up),
+                                            event_owner: "just".to_string(),
+                                        })
+                                        .unwrap(),
+                                    'a' => tx
+                                        .send(SnakeEvent {
+                                            event_type: SnakeEventType::Movement(Direction::Left),
+                                            event_owner: "just".to_string(),
+                                        })
+                                        .unwrap(),
+                                    's' => tx
+                                        .send(SnakeEvent {
+                                            event_type: SnakeEventType::Movement(Direction::Down),
+                                            event_owner: "just".to_string(),
+                                        })
+                                        .unwrap(),
+                                    'd' => tx
+                                        .send(SnakeEvent {
+                                            event_type: SnakeEventType::Movement(Direction::Right),
+                                            event_owner: "just".to_string(),
+                                        })
+                                        .unwrap(),
+                                    // 'r' => {
+                                    //     tx.send(SnakeEvent {
+                                    //         event_type: SnakeEventType::Signal(Signal::Disconnect),
+                                    //         event_owner: "just".to_string(),
+                                    //     })
+                                    //     .unwrap();
+                                    //     tx.send(SnakeEvent {
+                                    //         event_type: SnakeEventType::Signal(Signal::Connect),
+                                    //         event_owner: "just".to_string(),
+                                    //     })
+                                    //     .unwrap();
+                                    // }
+                                    'u' => use_unicode = !use_unicode,
+                                    'c' => use_rgb = !use_rgb,
+                                    'f' => use_fancy = !use_fancy,
+                                    '\\' => use_debug = !use_debug,
+                                    '/' => use_slow_mo = !use_slow_mo,
+                                    _ => {}
+                                },
+                                event::KeyCode::Esc => {
+                                    tx.send(SnakeEvent {
+                                        event_type: SnakeEventType::Signal(Signal::Disconnect),
+                                        event_owner: "just".to_string(),
+                                    })
+                                    .unwrap();
+                                    APP_RUNNING.store(false, Ordering::Relaxed);
+                                    break 'game_loop;
+                                }
+                                event::KeyCode::Enter => tx
+                                    .send(SnakeEvent {
+                                        event_type: SnakeEventType::Movement(Direction::Stop),
+                                        event_owner: "just".to_string(),
+                                    })
+                                    .unwrap(),
+                                _ => {}
+                            },
+                            event::Event::Resize(_, _) => buffer.resize(
+                                terminal::size().unwrap().0 as usize,
+                                terminal::size().unwrap().1 as usize,
+                            ),
+                            event::Event::Mouse(event) => match event.kind {
+                                event::MouseEventKind::Down(_) => {
+                                    stdout
+                                        .execute(SetTitle(format!(
+                                            "{}:{}",
+                                            event.column, event.row
+                                        )))
+                                        .unwrap();
+                                }
+                                _ => {}
+                            },
+                        };
+                    } else {
+                        break 'events;
+                    }
+                }
             }
         }
         // do logic
-
-        game = rx.recv().unwrap();
 
         //dra
         buffer.clear(RenderChar::empty());
