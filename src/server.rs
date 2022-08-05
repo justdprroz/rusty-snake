@@ -1,5 +1,5 @@
-use std::{thread, fs};
 use std::time::Duration;
+use std::{fs, thread};
 
 use lazy_static::lazy_static;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
@@ -60,14 +60,19 @@ async fn main() {
         let tx_event = tx_event.clone();
         tokio::spawn(async move {
             loop {
-                let mut buf = [0u8; 1_000_000];
                 if let Ok(g) = rx_game.try_recv() {
-                    let buf = bincode::serialize(&g).unwrap();
+                    let buf = bincode::serialize::<Game>(&g).unwrap();
+                    // println!("{}", buf.len());
+                    socket
+                        .write(&bincode::serialize::<usize>(&buf.len()).unwrap())
+                        .await
+                        .unwrap();
                     socket.write_all(&buf).await.unwrap();
                 }
+                let mut buf = [0u8; 1_000_000];
                 if let Ok(bytes) = socket.try_read(&mut buf) {
                     if bytes == 0 {
-                        return
+                        return;
                     }
                     let event: SnakeEvent = bincode::deserialize(&buf[..bytes]).unwrap();
                     tx_event.send(event).unwrap();

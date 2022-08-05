@@ -1,14 +1,15 @@
 // #![allow(dead_code)]
 
 use lazy_static::lazy_static;
-// Std Stuff
+// Std S&tuff
 use logic::{Cell, Direction, Game};
 use net::{Signal, SnakeEvent, SnakeEventType};
 use std::io::{stdout, BufWriter, Write};
+use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{fs, thread};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
 
@@ -57,30 +58,30 @@ fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
 async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpStream) {
     println!("Entering Socket Thread");
     while APP_RUNNING.load(Ordering::Relaxed) {
-        let mut buf = [0u8; 1_000_000];
         if let Ok(event) = rx.try_recv() {
             let buf = bincode::serialize(&event).unwrap();
             socket.write_all(&buf).await.unwrap();
         }
-        if let Ok(bytes) = socket.try_read(&mut buf) {
-            if bytes == 0 {
-                return;
-            }
-            let game: Game = bincode::deserialize(&buf[..bytes]).unwrap();
-            tx.send(game).unwrap();
-        };
+        let mut buf_len = [0u8; size_of::<usize>()];
+        if  socket.read_exact(&mut buf_len).await.unwrap() == 0 {
+            break;
+        }
+        let packet_len = bincode::deserialize(&buf_len).unwrap();
+        let mut buf = vec![0u8; packet_len];
+        socket.read_exact(&mut buf).await.unwrap();
+        let game: Game = bincode::deserialize::<Game>(&buf).unwrap();
+        tx.send(game).unwrap();
     }
     println!("Exiting Socket Thread");
 }
 
 async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     println!("Entered Render Thread");
-    terminal::enable_raw_mode().unwrap();
     let mut stdout = BufWriter::new(stdout());
+    terminal::enable_raw_mode().unwrap();
     stdout.execute(EnterAlternateScreen).unwrap();
     stdout.execute(Hide).unwrap();
     stdout.execute(event::EnableMouseCapture).unwrap();
-
     let (width, height) = (
         terminal::size().unwrap().0 as usize,
         terminal::size().unwrap().1 as usize,
@@ -90,7 +91,8 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
 
     // Game Stuff
     println!("Waiting For Game Copy");
-    let mut game: Game = rx.recv().await.unwrap();
+    // let mut game: Game = rx.recv().await.unwrap();
+    let mut game = Game::new(40, 20, 0, 0, true);
     println!("Got Game Copy");
     tx.send(SnakeEvent {
         event_type: SnakeEventType::Signal(Signal::Connect),
