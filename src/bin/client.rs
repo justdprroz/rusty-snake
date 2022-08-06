@@ -1,14 +1,14 @@
-// #![allow(dead_code)]
-
-use lazy_static::lazy_static;
-// Std S&tuff
-use logic::{Cell, Direction, Game};
-use net::{Signal, SnakeEvent, SnakeEventType};
+// Std stuff
 use std::io::{stdout, BufWriter, Write};
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{fs, thread};
+
+// Lazy static for runtime static variables
+use lazy_static::lazy_static;
+
+// Tokio
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast::{channel, Receiver, Sender};
@@ -19,17 +19,24 @@ use crossterm::style::{Color, Colors};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use crossterm::{event, terminal, ExecutableCommand, QueueableCommand};
 
-// Own Modules
-mod logic;
-mod net;
+// Rusty Snake logic lib
+use rusty_snake::{Cell, Direction, Game};
+use rusty_snake::{Signal, SnakeEvent, SnakeEventType};
 
 // Renderings
 use rusty_ascii_graphics::RenderBuffer;
 use rusty_ascii_graphics::{RectangleShape, RenderChar};
 
-// Global status
+// Global variables
 static APP_RUNNING: AtomicBool = AtomicBool::new(true);
+lazy_static! {
+    pub static ref CONF: toml::Value =
+        toml::from_str(&fs::read_to_string("Client.toml").unwrap()).unwrap();
+    pub static ref USERNAME: String = CONF["username"].as_str().unwrap().to_string();
+    pub static ref SERVER_ADDRESS: String = CONF["server_address"].as_str().unwrap().to_string();
+}
 
+// Help functions
 fn border_colors() -> Colors {
     Colors {
         foreground: Some(Color::Blue),
@@ -37,6 +44,7 @@ fn border_colors() -> Colors {
     }
 }
 
+// Function for integrated server thread
 #[allow(dead_code)]
 fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
     let (gw, gh) = (40, 20);
@@ -56,6 +64,7 @@ fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
     }
 }
 
+// Function for communicating with server
 async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpStream) {
     println!("Entering Socket Thread");
     while APP_RUNNING.load(Ordering::Relaxed) {
@@ -94,6 +103,7 @@ async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpS
     println!("Exiting Socket Thread 2");
 }
 
+// Main rendering function
 async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     println!("Entered Render Thread");
     let mut stdout = BufWriter::new(stdout());
@@ -517,13 +527,6 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
     println!("Exiting Render Thread");
 }
 
-lazy_static! {
-    pub static ref CONF: toml::Value =
-        toml::from_str(&fs::read_to_string("Client.toml").unwrap()).unwrap();
-    pub static ref USERNAME: String = CONF["username"].as_str().unwrap().to_string();
-    pub static ref SERVER_ADDRESS: String = CONF["server_address"].as_str().unwrap().to_string();
-}
-
 #[tokio::main]
 async fn main() {
     println!("{}", *SERVER_ADDRESS);
@@ -536,24 +539,7 @@ async fn main() {
     let stream = TcpStream::connect(SERVER_ADDRESS.to_string())
         .await
         .unwrap();
-    // if use_remote {
-    //     let tx_game = tx_game.clone();
-    //     let rx_event = tx_event.subscribe();
-    //     thread::Builder::new()
-    //         .name("Socket Thread".to_string())
-    //         .spawn(move || socket(tx_game, rx_event, stream))
-    //         .unwrap();
-    //     println!("Spawned Socket thread");
-    // } else {
-    //     let tx_game = tx_game.clone();
-    //     let rx_event = tx_event.subscribe();
-    //     thread::Builder::new()
-    //         .name("Server Thread".to_string())
-    //         .spawn(move || server(tx_game, rx_event))
-    //         .unwrap();
-    //     println!("Spawned Server thread");
-    // }
-    // let _socket_handle = tokio::spawn(socket(tx_game, rx_event, stream));
+
     let socket_handle = tokio::spawn(socket(tx_game, _rx_event, stream));
     let client_handle = thread::Builder::new()
         .name("Client Thread".to_string())

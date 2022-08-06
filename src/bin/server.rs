@@ -8,12 +8,15 @@ use tokio::{
     net::TcpListener,
 };
 
-use crate::logic::Game;
-use crate::net::SnakeEvent;
+// use crate::logic::Game;
+// use crate::net::SnakeEvent;
+
+use rusty_snake::Game;
+use rusty_snake::SnakeEvent;
 
 // Own Modules
-mod logic;
-mod net;
+// mod logic;
+// mod net;
 
 fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
     let (gw, gh) = (40, 20);

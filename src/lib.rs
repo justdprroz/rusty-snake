@@ -1,7 +1,23 @@
 use rand::Rng;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use crate::net::{Signal, SnakeEventType};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Signal {
+    Disconnect,
+    Connect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SnakeEventType {
+    Movement(Direction),
+    Signal(Signal),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnakeEvent {
+    pub event_type: SnakeEventType,
+    pub event_owner: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Direction {
