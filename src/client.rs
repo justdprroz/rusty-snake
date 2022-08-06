@@ -37,6 +37,7 @@ fn border_colors() -> Colors {
     }
 }
 
+#[allow(dead_code)]
 fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
     let (gw, gh) = (40, 20);
     let mut game: Game = Game::new(gw, gh, 10, 5, true);
@@ -58,21 +59,39 @@ fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
 async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpStream) {
     println!("Entering Socket Thread");
     while APP_RUNNING.load(Ordering::Relaxed) {
+        let mut buf_len = [0u8; size_of::<usize>()];
+        tokio::select! {
+            result = socket.read_exact(&mut buf_len) => {
+                let bytes = result.unwrap();
+                if bytes == 0 {
+                    println!("Exiting Socket Thread 1");
+                    break;
+                }
+                let packet_len = bincode::deserialize(&buf_len).unwrap();
+                let mut buf = vec![0u8; packet_len];
+                socket.read_exact(&mut buf).await.unwrap();
+                let game: Game = bincode::deserialize::<Game>(&buf).unwrap();
+                tx.send(game).unwrap();
+            },
+            result = rx.recv() => {
+                let event = result.unwrap();
+                let buf = bincode::serialize(&event).unwrap();
+                socket.write_all(&buf).await.unwrap();
+            },
+            else => {
+                println!("Nothing to proceed");
+            }
+        }
+    }
+    loop {
         if let Ok(event) = rx.try_recv() {
             let buf = bincode::serialize(&event).unwrap();
             socket.write_all(&buf).await.unwrap();
-        }
-        let mut buf_len = [0u8; size_of::<usize>()];
-        if  socket.read_exact(&mut buf_len).await.unwrap() == 0 {
+        } else {
             break;
         }
-        let packet_len = bincode::deserialize(&buf_len).unwrap();
-        let mut buf = vec![0u8; packet_len];
-        socket.read_exact(&mut buf).await.unwrap();
-        let game: Game = bincode::deserialize::<Game>(&buf).unwrap();
-        tx.send(game).unwrap();
     }
-    println!("Exiting Socket Thread");
+    println!("Exiting Socket Thread 2");
 }
 
 async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
@@ -99,6 +118,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
         event_owner: USERNAME.to_string(),
     })
     .unwrap();
+    println!("Send Connect");
     let (gw, gh) = (game.size.0, game.size.1);
 
     // let mut time = SystemTime::now();
@@ -181,7 +201,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                                         event_owner: USERNAME.to_string(),
                                     })
                                     .unwrap();
-                                    APP_RUNNING.store(false, Ordering::Relaxed);
+                                    // APP_RUNNING.store(false, Ordering::Relaxed);
                                     break 'game_loop;
                                 }
                                 event::KeyCode::Enter => {
@@ -215,6 +235,7 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                 }
             }
         }
+
         // do logic
 
         //dra
@@ -508,8 +529,8 @@ async fn main() {
     println!("{}", *SERVER_ADDRESS);
     println!("{}", USERNAME.to_string());
 
-    let (tx_game, rx_game) = channel::<Game>(32);
-    let (tx_event, rx_event) = channel::<SnakeEvent>(32);
+    let (tx_game, _rx_game) = channel::<Game>(32);
+    let (tx_event, _rx_event) = channel::<SnakeEvent>(32);
 
     let _use_remote = true;
     let stream = TcpStream::connect(SERVER_ADDRESS.to_string())
@@ -532,14 +553,14 @@ async fn main() {
     //         .unwrap();
     //     println!("Spawned Server thread");
     // }
-    let _socket_handle = tokio::spawn(socket(tx_game, rx_event, stream));
+    // let _socket_handle = tokio::spawn(socket(tx_game, rx_event, stream));
+    let socket_handle = tokio::spawn(socket(tx_game, _rx_event, stream));
     let client_handle = thread::Builder::new()
         .name("Client Thread".to_string())
-        .spawn(move || client(rx_game, tx_event))
+        .spawn(move || client(_rx_game, tx_event))
         .unwrap();
     println!("Spawned Client thread");
     client_handle.join().unwrap().await;
-    _socket_handle.abort();
-    // socket_handle.await.unwrap();
+    socket_handle.await.unwrap();
     println!("Exiting Main Thread");
 }

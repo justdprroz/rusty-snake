@@ -41,7 +41,7 @@ lazy_static! {
 
 #[tokio::main]
 async fn main() {
-    println!("Server started...");
+    println!("Server starting...");
     let (tx_game, _rx_game) = channel::<Game>(32);
     let (tx_event, _rx_event) = channel::<SnakeEvent>(32);
 
@@ -53,29 +53,31 @@ async fn main() {
         .unwrap();
 
     let listener = TcpListener::bind(SERVER_ADDRESS.to_string()).await.unwrap();
+
+    println!("Listening on: {}", listener.local_addr().unwrap());
+
     loop {
         let (mut socket, _addr) = listener.accept().await.unwrap();
-        println!("Got new connection");
+        println!("Got new connection: {}", _addr.clone());
         let mut rx_game = tx_game.subscribe();
         let tx_event = tx_event.clone();
         tokio::spawn(async move {
             loop {
-                if let Ok(g) = rx_game.try_recv() {
-                    let buf = bincode::serialize::<Game>(&g).unwrap();
-                    // println!("{}", buf.len());
-                    socket
-                        .write(&bincode::serialize::<usize>(&buf.len()).unwrap())
-                        .await
-                        .unwrap();
-                    socket.write_all(&buf).await.unwrap();
-                }
                 let mut buf = [0u8; 1_000_000];
-                if let Ok(bytes) = socket.try_read(&mut buf) {
-                    if bytes == 0 {
-                        return;
+                tokio::select! {
+                    Ok(g) = rx_game.recv() => {
+                        let buf = bincode::serialize::<Game>(&g).unwrap();
+                        socket.write(&bincode::serialize::<usize>(&buf.len()).unwrap()).await.unwrap();
+                        socket.write_all(&buf).await.unwrap();
+                    },
+                    Ok(bytes) = socket.read(&mut buf) => {
+                        if bytes == 0 {
+                            println!("User Disconnected: {}", _addr.clone());
+                            break;
+                        }
+                        let event: SnakeEvent = bincode::deserialize(&buf[..bytes]).unwrap();
+                        tx_event.send(event).unwrap();
                     }
-                    let event: SnakeEvent = bincode::deserialize(&buf[..bytes]).unwrap();
-                    tx_event.send(event).unwrap();
                 };
             }
         });

@@ -150,6 +150,7 @@ impl Game {
         if let Some(_) = self.snakes.iter().position(|s| *s.name == name) {
             return false;
         }
+        println!("Adding: {name}");
         let mut rng = rand::thread_rng();
         let pos = (
             rng.gen_range(0..self.size.0 as isize),
@@ -166,6 +167,7 @@ impl Game {
             Some(index) => index,
             None => return,
         };
+        println!("Removing: {name}");
         let current_snake = self.snakes.remove(snake_index);
         for part in current_snake.body {
             self.cells.set_cell(part.0, part.1, Cell::Empty);
