@@ -1,3 +1,4 @@
+use std::fmt::Display;
 // Std stuff
 use std::io::{stdout, BufWriter, Write};
 use std::mem::size_of;
@@ -15,9 +16,9 @@ use tokio::sync::broadcast::{channel, Receiver, Sender};
 
 // Crossterm
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::style::{Color, Colors};
+use crossterm::style::{Color, Colors, Print, ResetColor, SetColors};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
-use crossterm::{event, terminal, ExecutableCommand, QueueableCommand};
+use crossterm::{event, execute, terminal, ExecutableCommand, QueueableCommand};
 
 // Rusty Snake logic lib
 use rusty_snake::{Cell, Direction, Game};
@@ -44,6 +45,50 @@ fn border_colors() -> Colors {
     }
 }
 
+fn print_success<T: Display>(data: T) {
+    execute! {
+        stdout(),
+        SetColors(Colors {foreground: Some(Color::Green), background: None}),
+        Print(data),
+        Print('\n'),
+        ResetColor
+    }
+    .unwrap();
+}
+
+fn print_warn<T: Display>(data: T) {
+    execute! {
+        stdout(),
+        SetColors(Colors {foreground: Some(Color::Yellow), background: None}),
+        Print(data),
+        Print('\n'),
+        ResetColor
+    }
+    .unwrap();
+}
+
+fn print_failure<T: Display>(data: T) {
+    execute! {
+        stdout(),
+        SetColors(Colors {foreground: Some(Color::Red), background: None}),
+        Print(data),
+        Print('\n'),
+        ResetColor
+    }
+    .unwrap();
+}
+
+fn print_info<T: Display>(data: T) {
+    execute! {
+        stdout(),
+        SetColors(Colors {foreground: Some(Color::Blue), background: None}),
+        Print(data),
+        Print('\n'),
+        ResetColor
+    }
+    .unwrap();
+}
+
 // Function for integrated server thread
 #[allow(dead_code)]
 fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
@@ -66,29 +111,44 @@ fn server(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>) {
 
 // Function for communicating with server
 async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpStream) {
-    println!("Entering Socket Thread");
+    print_success("Entering communication thread");
     while APP_RUNNING.load(Ordering::Relaxed) {
         let mut buf_len = [0u8; size_of::<usize>()];
         tokio::select! {
-            result = socket.read_exact(&mut buf_len) => {
-                let bytes = result.unwrap();
+            Ok(bytes) = socket.read_exact(&mut buf_len) => {
                 if bytes == 0 {
-                    println!("Exiting Socket Thread 1");
+                    print_failure("Lost connection to server");
                     break;
                 }
                 let packet_len = bincode::deserialize(&buf_len).unwrap();
                 let mut buf = vec![0u8; packet_len];
                 socket.read_exact(&mut buf).await.unwrap();
                 let game: Game = bincode::deserialize::<Game>(&buf).unwrap();
-                tx.send(game).unwrap();
+                match tx.send(game) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        print_failure("Lost connection to render thread");
+                        break;
+                    },
+                };
             },
-            result = rx.recv() => {
-                let event = result.unwrap();
-                let buf = bincode::serialize(&event).unwrap();
-                socket.write_all(&buf).await.unwrap();
+            Ok(event) = rx.recv() => {
+                let serialized_data = bincode::serialize(&event).unwrap();
+                let serializes_len = bincode::serialize(&serialized_data.len()).unwrap();
+                let mut buf = Vec::<u8>::new();
+                buf.extend(&serializes_len);
+                buf.extend(&serialized_data);
+                match socket.write_all(&buf).await{
+                    Ok(_) => {},
+                    Err(_) => {
+                        print_failure("Lost connection to server");
+                        break;
+                    },
+                };
             },
             else => {
-                println!("Nothing to proceed");
+                print_failure("Lost connection to render thread & server");
+                break
             }
         }
     }
@@ -100,12 +160,14 @@ async fn socket(tx: Sender<Game>, mut rx: Receiver<SnakeEvent>, mut socket: TcpS
             break;
         }
     }
-    println!("Exiting Socket Thread 2");
+
+    APP_RUNNING.store(false, Ordering::Relaxed);
+    print_warn("Exiting communication thread");
 }
 
 // Main rendering function
 async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
-    println!("Entered Render Thread");
+    print_success("Entered Render Thread");
     let mut stdout = BufWriter::new(stdout());
     terminal::enable_raw_mode().unwrap();
     stdout.execute(EnterAlternateScreen).unwrap();
@@ -118,34 +180,28 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
 
     let mut buffer = RenderBuffer::new(width, height);
 
-    // Game Stuff
-    println!("Waiting For Game Copy");
-    // let mut game: Game = rx.recv().await.unwrap();
-    let mut game = Game::new(40, 20, 0, 0, true);
-    println!("Got Game Copy");
+    // Init Stuff
+    print_success("Send Connect");
     tx.send(SnakeEvent {
         event_type: SnakeEventType::Signal(Signal::Connect),
         event_owner: USERNAME.to_string(),
     })
     .unwrap();
-    println!("Send Connect");
-    let (gw, gh) = (game.size.0, game.size.1);
 
-    // let mut time = SystemTime::now();
+    print_warn("Waiting For Game Copy");
+    let mut game = Game::new(40, 20, 0, 0, true);
+    print_success("Got Game Copy");
+    let (gw, gh) = (game.size.0, game.size.1);
 
     let mut use_fancy: bool = true;
     let mut use_unicode: bool = false;
     let mut use_debug: bool = false;
     let mut use_slow_mo: bool = false;
     let mut use_rgb: bool = true;
+    let mut game_screen: bool = true;
 
     // Game Loop
     'game_loop: while APP_RUNNING.load(Ordering::Relaxed) {
-        // stdout
-        //     .queue(SetTitle((time.elapsed().unwrap().as_micros()) as u64))
-        //     .unwrap();
-        // time = SystemTime::now();
-        // get_input
         'events_or_game: loop {
             if let Ok(new_game) = rx.try_recv() {
                 game = new_game;
@@ -155,56 +211,83 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                     if event::poll(Duration::from_millis(10)).unwrap() {
                         match event::read().unwrap() {
                             event::Event::Key(event) => match event.code {
-                                event::KeyCode::Char(c) => match c {
-                                    'w' => {
-                                        tx.send(SnakeEvent {
-                                            event_type: SnakeEventType::Movement(Direction::Up),
-                                            event_owner: USERNAME.to_string(),
-                                        })
-                                        .unwrap();
+                                event::KeyCode::Char(c) => {
+                                    if game_screen {
+                                        match c {
+                                            'w' => {
+                                                tx.send(SnakeEvent {
+                                                    event_type: SnakeEventType::Movement(
+                                                        Direction::Up,
+                                                    ),
+                                                    event_owner: USERNAME.to_string(),
+                                                })
+                                                .unwrap();
+                                            }
+                                            'a' => {
+                                                tx.send(SnakeEvent {
+                                                    event_type: SnakeEventType::Movement(
+                                                        Direction::Left,
+                                                    ),
+                                                    event_owner: USERNAME.to_string(),
+                                                })
+                                                .unwrap();
+                                            }
+                                            's' => {
+                                                tx.send(SnakeEvent {
+                                                    event_type: SnakeEventType::Movement(
+                                                        Direction::Down,
+                                                    ),
+                                                    event_owner: USERNAME.to_string(),
+                                                })
+                                                .unwrap();
+                                            }
+                                            'd' => {
+                                                tx.send(SnakeEvent {
+                                                    event_type: SnakeEventType::Movement(
+                                                        Direction::Right,
+                                                    ),
+                                                    event_owner: USERNAME.to_string(),
+                                                })
+                                                .unwrap();
+                                            }
+                                            'q' => {
+                                                tx.send(SnakeEvent {
+                                                    event_type: SnakeEventType::Signal(
+                                                        Signal::Disconnect,
+                                                    ),
+                                                    event_owner: USERNAME.to_string().to_owned(),
+                                                })
+                                                .unwrap();
+                                            }
+                                            'r' => {
+                                                tx.send(SnakeEvent {
+                                                    event_type: SnakeEventType::Signal(
+                                                        Signal::Connect,
+                                                    ),
+                                                    event_owner: USERNAME.to_string(),
+                                                })
+                                                .unwrap();
+                                            }
+                                            _ => {}
+                                        }
                                     }
-                                    'a' => {
-                                        tx.send(SnakeEvent {
-                                            event_type: SnakeEventType::Movement(Direction::Left),
-                                            event_owner: USERNAME.to_string(),
-                                        })
-                                        .unwrap();
+                                    match c {
+                                        't' => {
+                                            game_screen = !game_screen;
+                                            if game_screen {
+                                                stdout.execute(EnterAlternateScreen).unwrap();
+                                            } else {
+                                                stdout.execute(LeaveAlternateScreen).unwrap();
+                                            }
+                                        }
+                                        'u' => use_unicode = !use_unicode,
+                                        'c' => use_rgb = !use_rgb,
+                                        'f' => use_fancy = !use_fancy,
+                                        '\\' => use_debug = !use_debug,
+                                        '/' => use_slow_mo = !use_slow_mo,
+                                        _ => {}
                                     }
-                                    's' => {
-                                        tx.send(SnakeEvent {
-                                            event_type: SnakeEventType::Movement(Direction::Down),
-                                            event_owner: USERNAME.to_string(),
-                                        })
-                                        .unwrap();
-                                    }
-                                    'd' => {
-                                        tx.send(SnakeEvent {
-                                            event_type: SnakeEventType::Movement(Direction::Right),
-                                            event_owner: USERNAME.to_string(),
-                                        })
-                                        .unwrap();
-                                    }
-                                    'q' => {
-                                        tx.send(SnakeEvent {
-                                            event_type: SnakeEventType::Signal(Signal::Disconnect),
-                                            event_owner: USERNAME.to_string().to_owned(),
-                                        })
-                                        .unwrap();
-                                    }
-                                    'r' => {
-                                        tx.send(SnakeEvent {
-                                            event_type: SnakeEventType::Signal(Signal::Connect),
-                                            event_owner: USERNAME.to_string(),
-                                        })
-                                        .unwrap();
-                                    }
-                                    'u' => use_unicode = !use_unicode,
-                                    'c' => use_rgb = !use_rgb,
-                                    'f' => use_fancy = !use_fancy,
-                                    '\\' => use_debug = !use_debug,
-                                    '/' => use_slow_mo = !use_slow_mo,
-                                    _ => {}
-                                },
+                                }
                                 event::KeyCode::Esc => {
                                     tx.send(SnakeEvent {
                                         event_type: SnakeEventType::Signal(Signal::Disconnect),
@@ -249,187 +332,71 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
         // do logic
 
         //dra
-        buffer.clear(RenderChar::empty());
+        if game_screen {
+            buffer.clear(RenderChar::empty());
+            if use_fancy {
+                let char_set = [
+                    RenderChar::new('╔', border_colors()),
+                    RenderChar::new('╗', border_colors()),
+                    RenderChar::new('╚', border_colors()),
+                    RenderChar::new('╝', border_colors()),
+                    RenderChar::new('═', border_colors()),
+                    RenderChar::new('║', border_colors()),
+                ];
+                let r = RectangleShape::new(0, 0, 1, 1, char_set[0].clone(), false);
+                buffer.draw(&r);
 
-        if use_fancy {
-            let char_set = [
-                RenderChar::new('╔', border_colors()),
-                RenderChar::new('╗', border_colors()),
-                RenderChar::new('╚', border_colors()),
-                RenderChar::new('╝', border_colors()),
-                RenderChar::new('═', border_colors()),
-                RenderChar::new('║', border_colors()),
-            ];
-            let r = RectangleShape::new(0, 0, 1, 1, char_set[0].clone(), false);
-            buffer.draw(&r);
+                let r = RectangleShape::new((gw + 1) as isize, 0, 1, 1, char_set[1].clone(), false);
+                buffer.draw(&r);
 
-            let r = RectangleShape::new((gw + 1) as isize, 0, 1, 1, char_set[1].clone(), false);
-            buffer.draw(&r);
-
-            let r = RectangleShape::new(0, (gh + 1) as isize, 1, 1, char_set[2].clone(), false);
-            buffer.draw(&r);
-
-            let r = RectangleShape::new(
-                (gw + 1) as isize,
-                (gh + 1) as isize,
-                1,
-                1,
-                char_set[3].clone(),
-                false,
-            );
-            buffer.draw(&r);
-
-            let r = RectangleShape::new(1, 0, gw as isize, 1, char_set[4].clone(), false);
-            buffer.draw(&r);
-
-            let r = RectangleShape::new(
-                1,
-                gh as isize + 1,
-                gw as isize,
-                1,
-                char_set[4].clone(),
-                false,
-            );
-            buffer.draw(&r);
-
-            let r = RectangleShape::new(0, 1, 1, gh as isize, char_set[5].clone(), false);
-            buffer.draw(&r);
-
-            let r = RectangleShape::new(
-                gw as isize + 1,
-                1,
-                1,
-                gh as isize,
-                char_set[5].clone(),
-                false,
-            );
-            buffer.draw(&r);
-        } else {
-            let r = RectangleShape::new(
-                0,
-                0,
-                (gw + 2) as isize,
-                (gh + 2) as isize,
-                RenderChar::new(
-                    '#',
-                    Colors {
-                        foreground: Some(Color::Blue),
-                        background: None,
-                    },
-                ),
-                false,
-            );
-            buffer.draw(&r);
-        }
-
-        for food in game.get_food() {
-            let r = RectangleShape::new(
-                (food.0 + 1) as isize,
-                (food.1 + 1) as isize,
-                1,
-                1,
-                RenderChar::new(
-                    if use_unicode && use_fancy { '※' } else { '*' },
-                    Colors {
-                        foreground: Some(Color::Red),
-                        background: None,
-                    },
-                ),
-                false,
-            );
-            buffer.draw(&r);
-        }
-
-        let mut my_snake_found: bool = false;
-
-        for snake in &game.snakes {
-            let (tail_color, head_color) = if snake.name == USERNAME.to_string() {
-                my_snake_found = true;
-                (Some(Color::Yellow), Some(Color::Green))
-            } else {
-                (Some(Color::Red), Some(Color::Blue))
-            };
-            for part_index in (1..snake.get_body().len()).rev() {
-                let part = snake.get_body()[part_index];
-                let next_part = snake.get_body()[part_index - 1];
-                let diff_next = if part.0 - next_part.0 == 1 {
-                    4
-                } else if part.0 - next_part.0 == -1 {
-                    2
-                } else if part.1 - next_part.1 == 1 {
-                    1
-                } else if part.1 - next_part.1 == -1 {
-                    3
-                } else {
-                    5
-                };
-
-                let cur_char = if use_fancy {
-                    let char_set = if true {
-                        ['│', '─', '.', '└', '┐', '┘', '┌']
-                    } else {
-                        ['|', '-', '.', '\\', '\\', '/', '/']
-                    };
-                    if part_index == snake.get_body().len() - 1 {
-                        if diff_next == 1 || diff_next == 3 {
-                            char_set[0]
-                        } else if diff_next == 2 || diff_next == 4 {
-                            char_set[1]
-                        } else {
-                            char_set[2]
-                        }
-                    } else {
-                        let prev_part = snake.get_body()[part_index + 1];
-                        let diff_prev = if part.0 - prev_part.0 == 1 {
-                            4
-                        } else if part.0 - prev_part.0 == -1 {
-                            2
-                        } else if part.1 - prev_part.1 == 1 {
-                            1
-                        } else if part.1 - prev_part.1 == -1 {
-                            3
-                        } else {
-                            5
-                        };
-                        if diff_next == 1 && diff_prev == 2 || diff_next == 2 && diff_prev == 1 {
-                            char_set[3]
-                        } else if diff_next == 3 && diff_prev == 4
-                            || diff_next == 4 && diff_prev == 3
-                        {
-                            char_set[4]
-                        } else if diff_next == 1 && diff_prev == 4
-                            || diff_next == 4 && diff_prev == 1
-                        {
-                            char_set[5]
-                        } else if diff_next == 3 && diff_prev == 2
-                            || diff_next == 2 && diff_prev == 3
-                        {
-                            char_set[6]
-                        } else if diff_next == 1 && diff_prev == 3
-                            || diff_next == 3 && diff_prev == 1
-                        {
-                            char_set[0]
-                        } else if diff_next == 2 && diff_prev == 4
-                            || diff_next == 4 && diff_prev == 2
-                        {
-                            char_set[1]
-                        } else {
-                            char_set[2]
-                        }
-                    }
-                } else {
-                    '0'
-                };
+                let r = RectangleShape::new(0, (gh + 1) as isize, 1, 1, char_set[2].clone(), false);
+                buffer.draw(&r);
 
                 let r = RectangleShape::new(
-                    (part.0 + 1) as isize,
-                    (part.1 + 1) as isize,
+                    (gw + 1) as isize,
+                    (gh + 1) as isize,
                     1,
                     1,
+                    char_set[3].clone(),
+                    false,
+                );
+                buffer.draw(&r);
+
+                let r = RectangleShape::new(1, 0, gw as isize, 1, char_set[4].clone(), false);
+                buffer.draw(&r);
+
+                let r = RectangleShape::new(
+                    1,
+                    gh as isize + 1,
+                    gw as isize,
+                    1,
+                    char_set[4].clone(),
+                    false,
+                );
+                buffer.draw(&r);
+
+                let r = RectangleShape::new(0, 1, 1, gh as isize, char_set[5].clone(), false);
+                buffer.draw(&r);
+
+                let r = RectangleShape::new(
+                    gw as isize + 1,
+                    1,
+                    1,
+                    gh as isize,
+                    char_set[5].clone(),
+                    false,
+                );
+                buffer.draw(&r);
+            } else {
+                let r = RectangleShape::new(
+                    0,
+                    0,
+                    (gw + 2) as isize,
+                    (gh + 2) as isize,
                     RenderChar::new(
-                        cur_char,
+                        '#',
                         Colors {
-                            foreground: tail_color,
+                            foreground: Some(Color::Blue),
                             background: None,
                         },
                     ),
@@ -438,99 +405,217 @@ async fn client(mut rx: Receiver<Game>, tx: Sender<SnakeEvent>) {
                 buffer.draw(&r);
             }
 
-            let r = RectangleShape::new(
-                (snake.get_body()[0].0 + 1) as isize,
-                (snake.get_body()[0].1 + 1) as isize,
-                1,
-                1,
-                RenderChar::new(
-                    '@',
-                    Colors {
-                        foreground: head_color,
-                        background: None,
-                    },
-                ),
-                false,
-            );
-            buffer.draw(&r);
-        }
-        if !my_snake_found {
-            tx.send(SnakeEvent {
-                event_type: SnakeEventType::Signal(Signal::Connect),
-                event_owner: USERNAME.to_string(),
-            })
-            .unwrap();
-        }
-
-        let colors = if use_rgb {
-            [
-                Some(Color::Rgb { r: 127, g: 0, b: 0 }),
-                Some(Color::Rgb {
-                    r: 127,
-                    g: 0,
-                    b: 127,
-                }),
-                Some(Color::Rgb { r: 0, g: 0, b: 0 }),
-                Some(Color::Rgb { r: 0, g: 127, b: 0 }),
-            ]
-        } else {
-            [
-                Some(Color::Red),
-                Some(Color::Magenta),
-                Some(Color::Black),
-                Some(Color::DarkGreen),
-            ]
-        };
-
-        if use_debug {
-            for x in 0..gw + 2 {
-                for y in 0..gh + 2 {
-                    let cc = buffer.get((x) as isize, (y) as isize);
-                    let o = game
-                        .get_owners_tables()
-                        .get_cell(x as isize - 1, y as isize - 1);
-                    let nc = RenderChar::new(
-                        cc.char,
-                        match o {
-                            Cell::Player(_) => Colors {
-                                foreground: cc.colors.foreground,
-                                background: colors[0],
-                            },
-                            Cell::Food => Colors {
-                                foreground: cc.colors.foreground,
-                                background: colors[1],
-                            },
-                            Cell::Wall | Cell::Void => Colors {
-                                foreground: cc.colors.foreground,
-                                background: colors[2],
-                            },
-                            Cell::Empty => Colors {
-                                foreground: cc.colors.foreground,
-                                background: colors[3],
-                            },
+            for food in game.get_food() {
+                let r = RectangleShape::new(
+                    (food.0 + 1) as isize,
+                    (food.1 + 1) as isize,
+                    1,
+                    1,
+                    RenderChar::new(
+                        if use_unicode && use_fancy { '※' } else { '*' },
+                        Colors {
+                            foreground: Some(Color::Red),
+                            background: None,
                         },
+                    ),
+                    false,
+                );
+                buffer.draw(&r);
+            }
+
+            let mut my_snake_found: bool = false;
+
+            for snake in &game.snakes {
+                let (tail_color, head_color) = if snake.name == USERNAME.to_string() {
+                    my_snake_found = true;
+                    (Some(Color::Yellow), Some(Color::Green))
+                } else {
+                    (Some(Color::Red), Some(Color::Blue))
+                };
+                for part_index in (1..snake.get_body().len()).rev() {
+                    let part = snake.get_body()[part_index];
+                    let next_part = snake.get_body()[part_index - 1];
+                    let diff_next = if part.0 - next_part.0 == 1 {
+                        4
+                    } else if part.0 - next_part.0 == -1 {
+                        2
+                    } else if part.1 - next_part.1 == 1 {
+                        1
+                    } else if part.1 - next_part.1 == -1 {
+                        3
+                    } else {
+                        5
+                    };
+
+                    let cur_char = if use_fancy {
+                        let char_set = if true {
+                            ['│', '─', '.', '└', '┐', '┘', '┌']
+                        } else {
+                            ['|', '-', '.', '\\', '\\', '/', '/']
+                        };
+                        if part_index == snake.get_body().len() - 1 {
+                            if diff_next == 1 || diff_next == 3 {
+                                char_set[0]
+                            } else if diff_next == 2 || diff_next == 4 {
+                                char_set[1]
+                            } else {
+                                char_set[2]
+                            }
+                        } else {
+                            let prev_part = snake.get_body()[part_index + 1];
+                            let diff_prev = if part.0 - prev_part.0 == 1 {
+                                4
+                            } else if part.0 - prev_part.0 == -1 {
+                                2
+                            } else if part.1 - prev_part.1 == 1 {
+                                1
+                            } else if part.1 - prev_part.1 == -1 {
+                                3
+                            } else {
+                                5
+                            };
+                            if diff_next == 1 && diff_prev == 2 || diff_next == 2 && diff_prev == 1
+                            {
+                                char_set[3]
+                            } else if diff_next == 3 && diff_prev == 4
+                                || diff_next == 4 && diff_prev == 3
+                            {
+                                char_set[4]
+                            } else if diff_next == 1 && diff_prev == 4
+                                || diff_next == 4 && diff_prev == 1
+                            {
+                                char_set[5]
+                            } else if diff_next == 3 && diff_prev == 2
+                                || diff_next == 2 && diff_prev == 3
+                            {
+                                char_set[6]
+                            } else if diff_next == 1 && diff_prev == 3
+                                || diff_next == 3 && diff_prev == 1
+                            {
+                                char_set[0]
+                            } else if diff_next == 2 && diff_prev == 4
+                                || diff_next == 4 && diff_prev == 2
+                            {
+                                char_set[1]
+                            } else {
+                                char_set[2]
+                            }
+                        }
+                    } else {
+                        '0'
+                    };
+
+                    let r = RectangleShape::new(
+                        (part.0 + 1) as isize,
+                        (part.1 + 1) as isize,
+                        1,
+                        1,
+                        RenderChar::new(
+                            cur_char,
+                            Colors {
+                                foreground: tail_color,
+                                background: None,
+                            },
+                        ),
+                        false,
                     );
-                    buffer.put((x) as isize, (y) as isize, nc);
+                    buffer.draw(&r);
+                }
+
+                let r = RectangleShape::new(
+                    (snake.get_body()[0].0 + 1) as isize,
+                    (snake.get_body()[0].1 + 1) as isize,
+                    1,
+                    1,
+                    RenderChar::new(
+                        '@',
+                        Colors {
+                            foreground: head_color,
+                            background: None,
+                        },
+                    ),
+                    false,
+                );
+                buffer.draw(&r);
+            }
+            if !my_snake_found {
+                tx.send(SnakeEvent {
+                    event_type: SnakeEventType::Signal(Signal::Connect),
+                    event_owner: USERNAME.to_string(),
+                })
+                .unwrap();
+            }
+
+            let colors = if use_rgb {
+                [
+                    Some(Color::Rgb { r: 127, g: 0, b: 0 }),
+                    Some(Color::Rgb {
+                        r: 127,
+                        g: 0,
+                        b: 127,
+                    }),
+                    Some(Color::Rgb { r: 0, g: 0, b: 0 }),
+                    Some(Color::Rgb { r: 0, g: 127, b: 0 }),
+                ]
+            } else {
+                [
+                    Some(Color::Red),
+                    Some(Color::Magenta),
+                    Some(Color::Black),
+                    Some(Color::DarkGreen),
+                ]
+            };
+
+            if use_debug {
+                for x in 0..gw + 2 {
+                    for y in 0..gh + 2 {
+                        let cc = buffer.get((x) as isize, (y) as isize);
+                        let o = game
+                            .get_owners_tables()
+                            .get_cell(x as isize - 1, y as isize - 1);
+                        let nc = RenderChar::new(
+                            cc.char,
+                            match o {
+                                Cell::Player(_) => Colors {
+                                    foreground: cc.colors.foreground,
+                                    background: colors[0],
+                                },
+                                Cell::Food => Colors {
+                                    foreground: cc.colors.foreground,
+                                    background: colors[1],
+                                },
+                                Cell::Wall | Cell::Void => Colors {
+                                    foreground: cc.colors.foreground,
+                                    background: colors[2],
+                                },
+                                Cell::Empty => Colors {
+                                    foreground: cc.colors.foreground,
+                                    background: colors[3],
+                                },
+                            },
+                        );
+                        buffer.put((x) as isize, (y) as isize, nc);
+                    }
                 }
             }
+
+            stdout.queue(MoveTo(0, 0)).unwrap();
+            buffer.render_to(&mut stdout);
+
+            stdout.flush().unwrap();
         }
-
-        stdout.queue(MoveTo(0, 0)).unwrap();
-        buffer.render_to(&mut stdout);
-
-        stdout.flush().unwrap();
     }
     stdout.execute(LeaveAlternateScreen).unwrap();
     stdout.execute(event::DisableMouseCapture).unwrap();
     stdout.execute(Show).unwrap();
     terminal::disable_raw_mode().unwrap();
-    println!("Exiting Render Thread");
+    print_warn("Exiting Render Thread");
 }
 
 #[tokio::main]
 async fn main() {
-    println!("{}", *SERVER_ADDRESS);
-    println!("{}", USERNAME.to_string());
+    print_info(format!("Server address {}", SERVER_ADDRESS.to_string()));
+    print_info(format!("Your name {}", USERNAME.to_string()));
 
     let (tx_game, _rx_game) = channel::<Game>(32);
     let (tx_event, _rx_event) = channel::<SnakeEvent>(32);
@@ -545,8 +630,8 @@ async fn main() {
         .name("Client Thread".to_string())
         .spawn(move || client(_rx_game, tx_event))
         .unwrap();
-    println!("Spawned Client thread");
+    print_success("Spawned Client thread");
     client_handle.join().unwrap().await;
     socket_handle.await.unwrap();
-    println!("Exiting Main Thread");
+    print_warn("Exiting Main Thread");
 }

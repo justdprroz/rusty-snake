@@ -1,3 +1,4 @@
+use std::mem::size_of;
 use std::time::Duration;
 use std::{fs, thread};
 
@@ -11,7 +12,7 @@ use tokio::{
 // use crate::logic::Game;
 // use crate::net::SnakeEvent;
 
-use rusty_snake::Game;
+use rusty_snake::{Game, Signal, SnakeEventType};
 use rusty_snake::SnakeEvent;
 
 // Own Modules
@@ -66,23 +67,35 @@ async fn main() {
         let tx_event = tx_event.clone();
         tokio::spawn(async move {
             loop {
-                let mut buf = [0u8; 1_000_000];
+                let mut buf_len = [0u8; size_of::<usize>()];
                 tokio::select! {
                     Ok(g) = rx_game.recv() => {
-                        let buf = bincode::serialize::<Game>(&g).unwrap();
-                        socket.write(&bincode::serialize::<usize>(&buf.len()).unwrap()).await.unwrap();
+                        let serialized_data = bincode::serialize(&g).unwrap();
+                        let serializes_len = bincode::serialize(&serialized_data.len()).unwrap();
+                        let mut buf = Vec::<u8>::new();
+                        buf.extend(&serializes_len);
+                        buf.extend(&serialized_data);
                         socket.write_all(&buf).await.unwrap();
                     },
-                    Ok(bytes) = socket.read(&mut buf) => {
+                    Ok(bytes) = socket.read_exact(&mut buf_len) => {
                         if bytes == 0 {
-                            println!("User Disconnected: {}", _addr.clone());
+                            println!("User Disconnected (Lost Connection): {}", _addr.clone());
                             break;
                         }
-                        let event: SnakeEvent = bincode::deserialize(&buf[..bytes]).unwrap();
+                        let packet_len = bincode::deserialize(&buf_len).unwrap();
+                        let mut buf = vec![0u8; packet_len];
+                        socket.read_exact(&mut buf).await.unwrap();
+                        let event: SnakeEvent = bincode::deserialize(&buf).unwrap();
+                        if let SnakeEventType::Signal(Signal::Disconnect) = event.event_type {
+                            tx_event.send(event).unwrap();
+                            println!("User Disconnected (Event): {}", _addr.clone());
+                            break;
+                        }
                         tx_event.send(event).unwrap();
                     }
                 };
             }
+            println!("Exiting {} task", _addr.clone());
         });
     }
 }
